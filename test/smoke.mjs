@@ -10,6 +10,9 @@
  */
 import { strict as assert } from 'node:assert'
 import { join } from 'node:path'
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
 
 import { compare, bumpType, satisfies, maxVersion, parse, isUpgrade } from '../lib/semver.js'
 import { classifySpec, scanProfile, readPatchedDependencies, guessActiveProfile, profileDir, listProfiles } from '../lib/profile.js'
@@ -18,6 +21,7 @@ import { diffFileMaps, sliceChangelog, findChangelog, renderDiffForPrompt } from
 import { parseVerdict, normalizeVerdict, pickTier, salvageJson, VERDICTS } from '../lib/review.js'
 import { extractBareImports, parsePatchIds, staticCheck, renderReport } from '../lib/install-guard.js'
 import { jsonSafe, safeString } from '../lib/jsonsafe.js'
+import { HOST_INJECTED, writeStub, isDeclaredDep } from '../lib/sandbox-trial.js'
 
 let pass = 0
 let failed = 0
@@ -422,6 +426,51 @@ t('jsonSafe：好数据原样不动、fixed 为空', () => {
 t('safeString 不改变正常中文/emoji', () => {
   const s = '鲸鱼娘🐳正常字符串'
   assert.equal(safeString(s), s)
+})
+
+// ── 沙箱试跑：宿主注入包的判定与造桩 ───────────────────────────────────────────
+// 背景：dsh-archive-manager 1.1.7 用 `import * as X from 'pkg'`，旧正则漏了这种写法，
+//       桩没造出来 → 试跑报「Cannot find package '@deepseek-ai/dsh-session'」→
+//       差点把一次正常更新判死（现装的 1.1.6 一模一样地 import，跑得好好的）。
+t('HOST_INJECTED 覆盖 dsh-session 这类宿主包', () => {
+  for (const p of ['@deepseek-ai/dsh-session', '@deepseek-ai/dsh-tools', 'react', 'react-dom']) {
+    assert.ok(HOST_INJECTED.includes(p), `${p} 应该在宿主注入白名单里`)
+  }
+})
+
+t('writeStub 造出的桩能被命名空间 import 解析', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ug-stub-'))
+  try {
+    const one = writeStub(dir, '@deepseek-ai/dsh-session', ['SessionId'])
+    assert.equal(one.ok, true)
+    const probe = join(dir, 'p.mjs')
+    writeFileSync(probe, [
+      "import * as S from '@deepseek-ai/dsh-session'",
+      "import { SessionId } from '@deepseek-ai/dsh-session'",
+      'console.log(JSON.stringify({ ok: typeof S === "object" && typeof SessionId !== "undefined" }))',
+    ].join('\n'), 'utf8')
+    const r = spawnSync(process.execPath, [probe], { cwd: dir, encoding: 'utf8' })
+    assert.equal(r.status, 0, String(r.stderr))
+    assert.equal(r.stdout.includes('"ok":true'), true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+t('isDeclaredDep 能区分「真缺依赖」与「宿主注入」', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ug-dep-'))
+  try {
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({
+      name: 'x', version: '1.0.0',
+      dependencies: { '@scope/real': '1.0.0', plain: '2.0.0' },
+    }), 'utf8')
+    assert.equal(isDeclaredDep(dir, '@scope/real'), true, '声明过的是真依赖')
+    assert.equal(isDeclaredDep(dir, 'plain/lib/x.js'), true, '子路径也要认')
+    assert.equal(isDeclaredDep(dir, '@deepseek-ai/dsh-session'), false, '没声明的按宿主注入处理')
+    assert.equal(isDeclaredDep(dir, '@deepseek-ai/dsh-session/types'), false, '带子路径同理')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
