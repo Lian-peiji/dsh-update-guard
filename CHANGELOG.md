@@ -1,5 +1,26 @@
 # 更新记录
 
+## 未发布 —— 市场哨兵（2026-10-22 夜）
+
+- **新增 `lib/sentinel.js` + `plugin_drift` 工具**：主人在**插件市场**里自己点「全部更新」时，
+  那条路不经过任何工具调用（`点按钮 → dshmarket 自己跑 pnpm → 宿主包操作`），
+  硬拦截拦不到。哨兵改为「事后第一时间说清楚」：
+  - 听 `plugin-manager/install-log`，认出 `ERR_PNPM_UNUSED_PATCH` / `ambiguous-install` /
+    retarget 提示 / frozen-lockfile 等坑，抠出包名记进错误知识库；
+  - 听 `plugin-manager/changed` 与 `install-state`，防抖 2.5s 后对比 profile 指纹
+    （依赖版本、声明源、`patchedDependencies` 登记、`patches/*.patch`、`intent.md`），
+    报「谁被换了版本 / 哪个补丁没了」；
+  - **基线落盘**（`profile/.update-guard/sentinel-baseline.json`）：市场更新常连带重启 DSH，
+    基线只在内存里就会丢掉那次变动 —— 这是最容易漏的一类。
+  - 只观察、只记录，**不改任何东西**（不重装、不重打补丁）；设置项 `sentinel`、`sentinelDebounceMs`。
+- 自测新增 `test/sentinel.mjs` **36 项**；`assemble` 现在会跑 11 个工具。
+- ⚠️ 已知局限：宿主的 `install-log` 事件载荷没有强类型契约，取不到文本时只退化掉「报了什么错」这层；
+  版本/补丁的对比走文件指纹，不依赖事件内容，始终有效。
+- ⚠️ 真机事故（同日晚）：主人在市场点「全部更新」，`dsh-fish-memory` 更新失败，
+  报 `更新前的构建未能验证恢复（{"code":"ambiguous-install"}）`。事后核查：profile 干净、
+  包退回、锁文件一致、两个补丁字节级完好、无需重启 —— 也就是说这条横幅是**虚警**，
+  但这正是「市场这条路我们看不见」的实证。
+
 ## 未发布 —— 补上最后三块（2026-10-22 晚）
 
 - **补丁打不上时可以「重新对准」**（`lib/patchfix.js`）：拉新版本原始文件 → 强档模型只挪位置不改行为 →
