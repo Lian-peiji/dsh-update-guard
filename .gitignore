@@ -1,0 +1,16 @@
+node_modules/
+.update-guard/
+*.log
+.DS_Store
+Thumbs.db
+
+# 阶段报告与调试脚本留在本地：里面有本机路径，不对外发
+P1-阶段报告.md
+P2-阶段报告.md
+P3-阶段报告.md
+P4-阶段报告.md
+test/dbg_trial.mjs
+test/probe_meme.mjs
+test/probe2.mjs
+test/post-restart.mjs
+test/demo_check.mjs

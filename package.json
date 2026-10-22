@@ -1,0 +1,59 @@
+{
+  "name": "dsh-update-guard",
+  "description": "插件管家：更新前让模型先审一遍——更新了什么、要不要装、会踩什么坑；更新后自动重放你的本地补丁，补丁冲突时按策略保住旧版。新装插件先做安全体检，出错有错误知识库，同一个坑不踩第二次。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "locale",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "author": "大肥鱼",
+  "repository": {
+    "type": "git",
+    "url": "git+https://atomgit.com/lpj_/dsh-update-guard.git"
+  },
+  "homepage": "https://atomgit.com/lpj_/dsh-update-guard",
+  "scripts": {
+    "test": "node test/smoke.mjs && node test/assemble.mjs && node test/p2.mjs && node test/client.mjs && node test/webapi.mjs && node test/p3-memory.mjs && node test/probe_cfg.mjs && node test/p4.mjs",
+    "test:live": "node test/live-restart-dry.mjs"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "plugin-update",
+    "patch-management",
+    "update-guard"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
+    }
+  },
+  "version": "0.1.0"
+}

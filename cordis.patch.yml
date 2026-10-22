@@ -1,0 +1,5 @@
+# dsh-update-guard bundle patch
+# 单包单插件：装上即生效，无额外子插件。
+- insert:
+    - id: dsh-update-guard
+      name: dsh-update-guard
