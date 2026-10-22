@@ -1,6 +1,29 @@
 # 更新记录
 
-## 未发布 —— 市场哨兵（2026-10-22 夜）
+## 未发布 —— 非 registry 源也能升级了（2026-10-22 夜）
+
+真机事故：主人在插件市场更新 `dsh-fish-memory`，连续失败两次，报
+`ERR_PNPM_UNUSED_PATCH` → `ambiguous-install`。
+
+- **根因一（市场的）**：补丁 key 钉在 `dsh-fish-memory@1.2.1`，而新 commit 里写的是 `1.2.2`。
+  pnpm 认为「这个补丁没处用」，直接中止整个安装。
+- **根因二（我们的）**：`plugin_update_apply` 对 git / tarball 源**直接拒绝升级**
+  （「不是 npm 上的包，没法改版本号」）—— 于是这种包永远修不了，正是主人说的死结。
+  而且重定位时把 git spec 当版本号，拼出 `dsh-fish-memory@github:...#sha` 这种 pnpm 绝不认的 key。
+- **修法**：
+  - `lib/recon.js` 新增 `parseTargetSpec` / `resolveTargetVersion` / `readVersionFromFiles`：
+    把「裸版本 / `github:owner/repo#ref` / tarball 地址 / dist-tag」统一解析出**真版本号**（下载 tarball 读 `package.json`）；
+  - `lib/apply.js` + `lib/sandbox-trial.js` 接受 `targetSpec`：非 registry 源改为**换 spec**（而不是写版本号），
+    同时补丁 key 按真版本重定位 —— 两件事必须成对发生；
+  - `lib/index.js` 的 `runUpdate` 与 `plugin_update_trial` 都先解析真版本再动手。
+- **踩到的坑（已写进代码注释）**：`github:` 简写会让 pnpm 去 **git clone github.com**，
+  而本机到 `github.com:443` 是**连不通**的（`ERR_PNPM_GIT_FETCH_FAILED`）。
+  必须换成 **codeload tarball 地址**——主人现有的 spec 就是这个形状。
+- 真机结果：`dsh-fish-memory 1.2.1 → 1.2.2` 装成功（试跑 8.4s / 真装 6.0s），
+  补丁重定位后**字节级打上**（`lib/index.js` 里那行「兼容旧版」注释就是补丁的产物），
+  旧 `@1.2.1` 补丁文件与 `intent.md` 一并升到 `@1.2.2`，补丁账本重新变干净。
+
+## 市场哨兵（2026-10-22 夜）
 
 - **新增 `lib/sentinel.js` + `plugin_drift` 工具**：主人在**插件市场**里自己点「全部更新」时，
   那条路不经过任何工具调用（`点按钮 → dshmarket 自己跑 pnpm → 宿主包操作`），

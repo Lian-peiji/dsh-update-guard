@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os'
 import { compare, bumpType, satisfies, maxVersion, parse, isUpgrade } from '../lib/semver.js'
 import { classifySpec, scanProfile, readPatchedDependencies, guessActiveProfile, profileDir, listProfiles } from '../lib/profile.js'
 import { scanPatches, patchBrief, parsePatchKey } from '../lib/patchledger.js'
-import { diffFileMaps, sliceChangelog, findChangelog, renderDiffForPrompt } from '../lib/recon.js'
+import { diffFileMaps, sliceChangelog, findChangelog, renderDiffForPrompt, parseTargetSpec, readVersionFromFiles } from '../lib/recon.js'
 import { parseVerdict, normalizeVerdict, pickTier, salvageJson, VERDICTS } from '../lib/review.js'
 import { extractBareImports, parsePatchIds, staticCheck, renderReport } from '../lib/install-guard.js'
 import { jsonSafe, safeString } from '../lib/jsonsafe.js'
@@ -471,6 +471,47 @@ t('isDeclaredDep 能区分「真缺依赖」与「宿主注入」', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  目标规格解析（真机事故：补丁 key 被拼成 `包名@github:...` → pnpm 不认）
+// ─────────────────────────────────────────────────────────────────────────────
+
+t('parseTargetSpec：裸版本号', () => {
+  const r = parseTargetSpec('1.2.2')
+  assert.equal(r.kind, 'version')
+  assert.equal(r.version, '1.2.2')
+  assert.equal(parseTargetSpec('1.2.2-beta.1').version, '1.2.2-beta.1')
+})
+
+t('parseTargetSpec：github:owner/repo#ref → codeload 地址', () => {
+  const r = parseTargetSpec('github:Yuuyuko-uu/dsh-fish-memory#d722f30abc')
+  assert.equal(r.kind, 'github')
+  assert.equal(r.owner, 'Yuuyuko-uu')
+  assert.equal(r.ref, 'd722f30abc')
+  assert.equal(r.tarballUrl, 'https://codeload.github.com/Yuuyuko-uu/dsh-fish-memory/tar.gz/d722f30abc')
+})
+
+t('parseTargetSpec：不带 ref 时用 HEAD；git+https 也认', () => {
+  assert.equal(parseTargetSpec('github:a/b').tarballUrl, 'https://codeload.github.com/a/b/tar.gz/HEAD')
+  const g = parseTargetSpec('git+https://github.com/a/b.git#v1.0.0')
+  assert.equal(g.kind, 'github')
+  assert.equal(g.ref, 'v1.0.0')
+})
+
+t('parseTargetSpec：http(s) tarball / 认不出的', () => {
+  assert.equal(parseTargetSpec('https://example.com/x.tgz').kind, 'tarball')
+  assert.equal(parseTargetSpec('latest').kind, 'unknown')
+  assert.equal(parseTargetSpec('').kind, 'unknown')
+})
+
+t('readVersionFromFiles：兼容 codeload 的 `<repo>-<sha>/package.json`', () => {
+  const flat = new Map([['package.json', Buffer.from(JSON.stringify({ version: '1.2.2' }))]])
+  assert.equal(readVersionFromFiles(flat), '1.2.2')
+  const nested = new Map([['dsh-fish-memory-d722f30/package.json', Buffer.from(JSON.stringify({ version: '9.9.9' }))]])
+  assert.equal(readVersionFromFiles(nested), '9.9.9')
+  assert.equal(readVersionFromFiles(new Map()), null)
+  assert.equal(readVersionFromFiles(new Map([['package.json', Buffer.from('{坏json')]])), null)
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
