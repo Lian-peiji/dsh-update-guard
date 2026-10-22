@@ -210,9 +210,10 @@ console.log('\n④ 面板渲染')
   ok(panel && panel.type === 'div', '渲染出根 div')
   ok(panel && panel.props.className === 'ug-panel', '根节点 class 是 ug-panel')
 
-  // 三个页签都在（注意 .ug-tabs 容器也以 ug-tab 开头，要精确匹配 ug-tab 后面跟空格/结束）
+  // 四个页签都在：更新记录 / 错误知识库 / 补丁账本 / 后台队列
+  // （注意 .ug-tabs 容器也以 ug-tab 开头，要精确匹配 ug-tab 后面跟空格/结束）
   const tabs = findNodes(panel, (n) => n.props && typeof n.props.className === 'string' && /^ug-tab(\s|$)/.test(n.props.className))
-  ok(tabs.length === 3, `渲染出 3 个页签（实际 ${tabs.length}）`)
+  ok(tabs.length === 4, `渲染出 4 个页签（实际 ${tabs.length}）`)
 }
 
 /** 深度遍历假元素树 */
@@ -256,6 +257,13 @@ console.log('\n⑥ 客户端与宿主接口路径一致')
   const clientBase = /const API_BASE = '([^']+)'/.exec(clientSrc)
   ok(clientBase !== null, '客户端侧有 API_BASE 常量')
   eq(clientBase[1], hostRoute[1], '两侧前缀必须一致（改了要同步，否则设置页全 404）')
+
+  // 第四个页签「后台队列」两边都要有：客户端要请求 /queue，宿主要有对应分支
+  ok(clientSrc.includes("'后台队列'"), '客户端有「后台队列」页签')
+  ok(/apiGet\('\/queue'/.test(clientSrc), '客户端会请求 /queue')
+  ok(/sub === 'queue'/.test(hostSrc), '宿主有 /queue 分支')
+  ok(/sub === 'queue\/remove'/.test(hostSrc), '宿主有 /queue/remove 分支')
+  ok(/sub === 'queue\/clear'/.test(hostSrc), '宿主有 /queue/clear 分支')
 }
 
 console.log(`\n${failed === 0 ? '✅' : '❌'} client：${pass} 通过 / ${failed} 失败`)

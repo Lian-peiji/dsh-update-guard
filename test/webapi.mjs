@@ -89,6 +89,16 @@ const fakeSources = buildSources({
     },
   ],
   listBackups: () => [{ stamp: '2026-10-22T06-52-41-754Z', name: 'dsh-meme', version: '0.1.55' }],
+  queue: {
+    state: () => ({
+      enabled: true, intervalMs: 60000, quietMs: 120000,
+      restartAfterApply: 'notify', patchFix: true,
+      items: [{ id: 'j1', name: 'dsh-meme', to: '0.1.56', status: 'pending', tries: 0, note: '主人排的' }],
+      idle: { busy: false, running: [], reason: null },
+    }),
+    remove: (id) => (id === 'j1' ? { ok: true, removed: 1 } : { ok: false, removed: 0, error: '没有这条待办' }),
+    clear: () => ({ ok: true, removed: 1 }),
+  },
 })
 
 const handler = createApiHandler(fakeSources)
@@ -203,5 +213,51 @@ console.log('\n⑥ 数据源缺失不崩')
   eq(r.json.ledger, [], '没有数据源 → 空数组')
 }
 
+// ══ ⑦ 后台队列接口 ═══════════════════════════════════════════════════════
+console.log('\n⑦ 后台队列接口')
+{
+  const r = await call(handler, ROUTE + '/queue')
+  eq(r.code, 200, 'queue 200')
+  eq(r.json.ok, true, 'queue ok')
+  eq(r.json.enabled, true, '带上开关状态')
+  eq(r.json.items.length, 1, '带上待办')
+  eq(r.json.items[0].name, 'dsh-meme', '待办内容对')
+  eq(r.json.idle.running.length, 0, '带上空闲快照')
+}
+{
+  const r = await call(handler, ROUTE + '/queue/remove')
+  eq(r.code, 400, 'remove 不给 id → 400')
+  eq(r.json.ok, false, 'remove 不给 id → ok:false')
+}
+{
+  const r = await call(handler, ROUTE + '/queue/remove?id=j1')
+  eq(r.code, 200, 'remove 正常 200')
+  eq(r.json.removed, 1, '报告删掉几条')
+}
+{
+  const r = await call(handler, ROUTE + '/queue/remove?id=nope')
+  eq(r.code, 400, '删不存在的待办 → 400')
+  eq(r.json.ok, false, '删不存在的待办 → ok:false')
+}
+{
+  const r = await call(handler, ROUTE + '/queue/clear')
+  eq(r.code, 200, 'clear 200')
+  eq(r.json.ok, true, 'clear ok')
+}
+{
+  const noQueue = createApiHandler(buildSources({}))
+  const r = await call(noQueue, ROUTE + '/queue')
+  eq(r.code, 200, '没有队列数据源也 200')
+  eq(r.json.enabled, false, '没有队列数据源 → 当成关着')
+  eq(Array.isArray(r.json.items), true, '没有队列数据源 → items 是空数组')
+}
+{
+  const boom = createApiHandler(buildSources({
+    queue: { state: () => { throw new Error('炸了') }, remove: () => { throw new Error('炸了') }, clear: () => { throw new Error('炸了') } },
+  }))
+  const r = await call(boom, ROUTE + '/queue')
+  eq(r.code, 200, '队列源炸了也 200')
+  eq(r.json.enabled, false, '队列源炸了 → 当成关着')
+}
 console.log(`\n${failed === 0 ? '✅' : '❌'} webapi：${pass} 通过 / ${failed} 失败`)
 process.exit(failed === 0 ? 0 : 1)
