@@ -1,5 +1,24 @@
 # 更新记录
 
+## 未发布 —— 管理台 404 修好了（2026-10-23 早）
+
+真机事故：主人打开「插件管家」设置页，接口全部 404，看起来像插件崩了。
+
+- **现象特别容易误判**：`plugin_manager` 里 `include:dsh-update-guard` 是
+  `enabled: true, fiberPhase: "active"`，11 个工具全部可用，
+  同端口 `/dsh-market/status` 也是 200 —— 只有 `/dsh-update-guard-api/*` 是 404。
+- **根因**：`lib/index.js` 注册路由时写的是 `ctx.get('webServer')`。
+  插件 `apply()` 跑到这一段时宿主 `webServer` 服务**还没挂载**，`ctx.get` 返回 `undefined`，
+  整块被静默跳过 → 路由从来没注册过。外面那层 try/catch 也不会报错，连一条 warn 都没有。
+- **修法**：改成生态里统一写法 `ctx.inject(['webServer'], (webCtx) => …)`，
+  服务就绪后再注册（`dsh-meme`、`billion-context`、皮肤插件都是这个写法）；
+  宿主没有 `inject` 时才退回「立即挂载」。
+- **验证**：同步两处部署副本 → 关再开（热重载，不用重启宿主）→
+  `/overview` `/patches` `/errors` `/queue` `/backups` 全部 200，并返回真实数据。
+- **教训（写进代码注释）**：宿主服务优先用 `ctx.inject` 拿，`ctx.get` 只用于
+  「有就有、没有也活」的可选能力；注册类副作用（路由 / 事件 / slot）即使跳过，
+  也要留一条 info 日志，否则真机上表现为「插件好好的，就是功能没了」。
+
 ## 未发布 —— 非 registry 源也能升级了（2026-10-22 夜）
 
 真机事故：主人在插件市场更新 `dsh-fish-memory`，连续失败两次，报
