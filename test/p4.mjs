@@ -106,6 +106,36 @@ await ta('attachIdle：把宿主事件接上、且监听器抛异常不会炸宿
   eq(Object.keys(handlers).length, 0, 'off() 要把监听器都摘掉')
 })
 
+await ta('attachIdle：session/event 是主力信号（turn/end 立刻算空闲，tool/call 算在跑）', async () => {
+  const handlers = {}
+  const tr = createIdleTracker({ quietMs: 0 })
+  const off = attachIdle(tr, (ev, fn) => { handlers[ev] = fn; return () => { delete handlers[ev] } })
+  ok(handlers['session/event'], '要接 session/event')
+  handlers['session/event']({ id: 's1' }, { type: 'tool/call' })
+  eq(tr.runningAgents(), ['s1'], 'tool/call 之后算在跑')
+  handlers['session/event']({ id: 's1' }, { type: 'turn/end' })
+  eq(tr.runningAgents(), [], 'turn/end 之后立刻放行（不必等 agent/status）')
+  ok(tr.isIdle(), 'quietMs=0 时 turn/end 就该空闲')
+  off()
+})
+
+await ta('createIdleTracker：过期的 running 不再拦人（2026-10-23 队列 2 小时不动的原因）', async () => {
+  let nowMs = 1_000_000
+  const tr = createIdleTracker({ quietMs: 0, staleMs: 60_000, now: () => nowMs })
+  tr.setStatus('s1', 'running')
+  eq(tr.runningAgents(), ['s1'], '刚设的 running 要拦人')
+  nowMs += 30_000
+  eq(tr.runningAgents(), ['s1'], '还在保质期内，继续拦')
+  nowMs += 61_000
+  eq(tr.runningAgents(), [], '超过 staleMs 又没新事件 → 当它不确定，不再拦')
+  nowMs = 2_000_000
+  tr.setStatus('s1', 'running')
+  nowMs += 50_000
+  tr.setStatus('s1', 'running')
+  nowMs += 50_000
+  eq(tr.runningAgents(), ['s1'], '有事件续期就不能放行')
+})
+
 console.log('\n=== queue：持久化与增删 ===')
 
 const dirA = mkdtempSync(join(tmpdir(), 'ug-p4-'))
