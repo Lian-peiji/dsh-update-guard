@@ -238,6 +238,37 @@ await ta('空闲时跑一个，成功标 done', async () => {
   rmSync(d, { recursive: true, force: true })
 })
 
+await ta('试跑没过的，不能标成 ✅ 装好了', async () => {
+  const d = mkdtempSync(join(tmpdir(), 'ug-p4f-'))
+  addJob(d, { name: 'trialfail', to: '2.6.17' })
+  const idle = { isIdle: () => true, reason: () => null, snapshot: () => ({}) }
+  const pump = createPump({
+    dir: d, idle,
+    runJob: async () => ({ ok: false, result: 'trial-failed', report: '## 试跑失败\n加载不了' }),
+  })
+  await pump.tick()
+  const job = readQueue(d).jobs[0]
+  eq(job.status, 'failed', '试跑失败要标 failed，不是 done')
+  ok(/试跑失败/.test(job.lastError ?? ''), '把失败原因记下来')
+  rmSync(d, { recursive: true, force: true })
+})
+
+await ta('审查拒了的，标 skipped 而不是 done', async () => {
+  const d = mkdtempSync(join(tmpdir(), 'ug-p4g-'))
+  addJob(d, { name: 'refusedpkg', to: '9.9.9' })
+  const idle = { isIdle: () => true, reason: () => null, snapshot: () => ({}) }
+  const pump = createPump({
+    dir: d, idle,
+    runJob: async () => ({ ok: false, result: 'refused', report: '## 审查判决：⚪ 跳过' }),
+  })
+  await pump.tick()
+  const job = readQueue(d).jobs[0]
+  eq(job.status, 'skipped', '被拒的记 skipped')
+  eq(job.lastError, '审查没让装')
+  ok(renderQueue(readQueue(d)).includes('⚪'), '渲染出 ⚪，一眼看出没装')
+  rmSync(d, { recursive: true, force: true })
+})
+
 await ta('失败了会重试，到上限标 failed（不无限重试）', async () => {
   const d = mkdtempSync(join(tmpdir(), 'ug-p4e-'))
   addJob(d, { name: 'badpkg', to: '3.0.0' })
