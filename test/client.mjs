@@ -231,8 +231,12 @@ console.log('\n⑤ 格式化函数')
   const { exports } = loadClient()
   const { fmtTime, resultBadge, severityBadge } = exports.__test
 
-  eq(fmtTime('2026-10-22T07:00:00.000Z'), '2026-10-22 07:00', 'ISO → 可读时间')
+  // 🔴 2026-10-23 主人真机反馈：档案里写的是 UTC，02:37 看着像半夜。
+  //    fmtTime 现在必须换算成北京时间（Asia/Shanghai），跟主人用的时段一致。
+  eq(fmtTime('2026-10-22T07:00:00.000Z'), '2026-10-22 15:00', 'UTC 07:00 → 北京时间 15:00')
+  eq(fmtTime('2026-10-23T02:37:37.841Z'), '2026-10-23 10:37', '真机那条 cc-safety-net 记录')
   eq(fmtTime(null), '未知时间', '空值 → 未知时间')
+  eq(fmtTime('不是时间'), '不是时间', '坏时间原样回显，不抛异常')
 
   eq(resultBadge('applied').text, '成功', 'applied → 成功')
   eq(resultBadge('ok').text, '成功', 'ok → 成功')
@@ -240,6 +244,9 @@ console.log('\n⑤ 格式化函数')
   eq(resultBadge('rolled-back').cls, 'warn', '回滚是黄色警告不是红色')
   eq(resultBadge('refused').cls, 'bad', '拒绝是红色')
   eq(resultBadge('noop').text, '无需更新', 'noop → 无需更新')
+  eq(resultBadge('install').text, '建议装', '过程码 install 显示成「建议装」')
+  eq(resultBadge('trial-failed').text, '试跑失败', '试跑失败有自己的说法')
+  eq(resultBadge('pass').text, '试跑通过', 'pass → 试跑通过')
 
   eq(severityBadge('critical').text, '致命', 'critical → 致命')
   eq(severityBadge('high').text, '严重', 'high → 严重')
