@@ -28,7 +28,7 @@
   },
   "homepage": "https://atomgit.com/lpj_/dsh-update-guard",
   "scripts": {
-    "test": "node test/smoke.mjs && node test/assemble.mjs && node test/p2.mjs && node test/client.mjs && node test/webapi.mjs && node test/p3-memory.mjs && node test/probe_cfg.mjs && node test/p4.mjs",
+    "test": "node test/smoke.mjs && node test/assemble.mjs && node test/p2.mjs && node test/client.mjs && node test/webapi.mjs && node test/p3-memory.mjs && node test/probe_cfg.mjs && node test/p4.mjs && node test/patchfix.mjs && node test/sentinel.mjs && node test/autoscan.mjs && node test/loadprobe.mjs",
     "test:live": "node test/live-restart-dry.mjs"
   },
   "keywords": [
@@ -55,5 +55,5 @@
       "platform": "web"
     }
   },
-  "version": "0.1.0"
+  "version": "0.1.3"
 }

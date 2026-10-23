@@ -1,3 +1,19 @@
+## 0.1.3（2026-10-23）
+
+修三个真机上当场被抓到的毛病：
+
+- **时间不再是 UTC**。更新档案里原本显示 `02:37`，实际是她上午 10:37 的操作。
+  现在一律换算成北京时间（`Asia/Shanghai`）显示，写在 `lib/client.js` 的 `fmtTime()`。
+- **统计卡片不再恒为 0**。装成功 / 已回滚 / 没装成 三张卡读的字段（`st.applied`、
+  `st.rolledBack`、`st.refused`）在档案里根本不存在，所以永远是 0；
+  现在由 `lib/memory.js` 的 `ledgerStats()` 按 `byResult` 明细自己数。
+- **bundle 插件不再被误判成「这不是一个 DSH 插件」**。`cc-safety-net` 2.6.17 就是被这条卡住的：
+  它是 bundle 插件（`package.json` 的 `dsh.bundle.patch` 指向 `cordis.patch.yml`），
+  入口本来只有 `default`，没有 `apply`。现在的规矩：**import 不抛异常就算装得上、加载得起来**；
+  有没有 `apply` 只影响一句说明，不影响判决。顶层就炸的包照样拦（`test/loadprobe.mjs` 12 项覆盖三类包 + 坏包）。
+
+另外把 `npm test` 补全成 12 个套件（原来漏了 `sentinel` / `patchfix` / `autoscan`），共 **394 项**。
+
 # 更新记录
 
 ## 未发布 —— 插件自己巡场，不用主人点（2026-10-23）
