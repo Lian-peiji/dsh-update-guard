@@ -67,6 +67,9 @@ pnpm add -D <本包来源>
 | `profile` | 当前会话的 profile | 管哪个 profile |
 | `queueEnabled` | `true` | 后台队列开关 |
 | `queueIntervalMs` | `60000` | 队列多久看一次 |
+| `autoScan` | `true` | 插件自己巡场：定时扫有没有新版本，不用主人点 |
+| `autoScanHours` | `6` | 多久扫一次（小时，最小 1） |
+| `autoEnqueueMax` | `5` | 一次最多排几个（大版本优先，剩下的下一轮） |
 | `idleQuietMs` | `120000` | 连续安静多久算空闲 |
 | `restartAfterApply` | `notify` | 装完后：`notify` 只提示 / `auto` 自动重启 / `never` 什么都不做 |
 | `appExe` | 自动识别 | DSH 可执行文件路径（认不出来时手动指定） |
