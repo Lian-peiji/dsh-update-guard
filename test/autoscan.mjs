@@ -126,6 +126,22 @@ group('pickEnqueueCandidates：谁能排')
 // ═══════════════════════════════════════════════════════════════════════════
 group('createAutoScan：一轮巡场')
 
+// 🔴 2026-10-25：scan() 卡住时 running 会永久为 true，巡场从此静默死掉。
+{
+  let scans = 0
+  const s = createAutoScan({
+    // 第一次永不返回（模拟 registry 抽风），第二次正常
+    scan: async () => { scans++; if (scans === 1) return new Promise(() => {}); return [] },
+    existing: () => [],
+    enqueue: async () => {},
+    timeoutMs: 50,
+  })
+  const r1 = await s.tick({ reason: 'first' })
+  ok('卡住的那轮要报超时，不能永远挂着', String(r1.error ?? '').includes('超时'), `实际：${JSON.stringify(r1)}`)
+  const r2 = await s.tick({ reason: 'second' })
+  ok('超时后 running 必须放掉，下一轮还能跑', r2.reason === 'second' && !r2.error && !r2.skipped?.length, `被卡成 busy 了：${JSON.stringify(r2)}`)
+}
+
 {
   const added = []
   const logs = []

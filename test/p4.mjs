@@ -10,9 +10,9 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'no
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
-import { createIdleTracker, attachIdle, scanBusySessions, lastEventType, DEFAULT_QUIET_MS } from '../lib/idle.js'
+import { createIdleTracker, attachIdle, scanBusySessions, lastEventType, turnStateOf, isBookkeeping, DEFAULT_QUIET_MS } from '../lib/idle.js'
 import {
-  readQueue, writeQueue, addJob, removeJob, clearQueue, pendingJobs,
+  readQueue, writeQueue, addJob, removeJob, clearQueue, pendingJobs, recoverZombieJobs, ZOMBIE_AFTER_MS,
   renderQueue, createPump, MAX_TRIES, queuePath,
 } from '../lib/queue.js'
 import { planRestart, renderHelper, restartSelf, BOOT_SETTLE_MS, RESTART_TRIES } from '../lib/restart.js'
@@ -339,6 +339,69 @@ await ta('同一时间只跑一个（busy 保护）', async () => {
 })
 
 console.log('')
+console.log('=== queue：收拾「僵尸 running」（2026-10-25 真机：卡了两天没人管）===')
+
+t('宿主重载留下的 running 任务 → 放回 pending，重新能跑', () => {
+  const d = mkdtempSync(join(tmpdir(), 'ug-zombie-'))
+  addJob(d, { name: 'pkg-a', to: '2.0.0' })
+  const q0 = readQueue(d)
+  const id = q0.jobs[0].id
+  // 模拟「跑起来就崩了」：状态写成 running、开始时间在两小时前
+  writeQueue(d, { jobs: q0.jobs.map((j) => ({ ...j, status: 'running', tries: 1, startedAt: new Date(Date.now() - 2 * 3600_000).toISOString() })) })
+  eq(pendingJobs(readQueue(d)).length, 0, '收拾前它不在 pending 里 —— 这就是卡死的原因')
+
+  const r = recoverZombieJobs(d)
+  eq(r.recovered.length, 1, '要认出来一个残留')
+  eq(pendingJobs(readQueue(d)).map((j) => j.id), [id], '放回 pending 才能被泵捡走')
+  rmSync(d, { recursive: true, force: true })
+})
+
+t('刚起步的 running 任务不许被误杀（可能真的在跑）', () => {
+  const d = mkdtempSync(join(tmpdir(), 'ug-zombie2-'))
+  addJob(d, { name: 'pkg-b', to: '1.1.0' })
+  const q0 = readQueue(d)
+  writeQueue(d, { jobs: q0.jobs.map((j) => ({ ...j, status: 'running', tries: 1, startedAt: new Date(Date.now() - 60_000).toISOString() })) })
+  const r = recoverZombieJobs(d)
+  eq(r.recovered.length, 0, '才跑了一分钟，不能动它')
+  eq(readQueue(d).jobs[0].status, 'running')
+  rmSync(d, { recursive: true, force: true })
+})
+
+t('残留且已试满 3 次 → 判 failed，不再无限重试', () => {
+  const d = mkdtempSync(join(tmpdir(), 'ug-zombie3-'))
+  addJob(d, { name: 'pkg-c', to: '3.0.0' })
+  const q0 = readQueue(d)
+  writeQueue(d, { jobs: q0.jobs.map((j) => ({ ...j, status: 'running', tries: MAX_TRIES, startedAt: new Date(Date.now() - 5 * 3600_000).toISOString() })) })
+  const r = recoverZombieJobs(d)
+  eq(r.failed.length, 1)
+  eq(readQueue(d).jobs[0].status, 'failed')
+  ok(String(readQueue(d).jobs[0].lastError).includes('宿主没了'), '要说清为什么失败')
+  rmSync(d, { recursive: true, force: true })
+})
+
+t('没有 startedAt 的残缺 running → 直接放回队列', () => {
+  const d = mkdtempSync(join(tmpdir(), 'ug-zombie4-'))
+  addJob(d, { name: 'pkg-d', to: '4.0.0' })
+  const q0 = readQueue(d)
+  writeQueue(d, { jobs: q0.jobs.map((j) => ({ ...j, status: 'running', tries: 1 })) })
+  const r = recoverZombieJobs(d)
+  eq(r.recovered.length, 1, '缺开始时间一定是残局')
+  eq(pendingJobs(readQueue(d)).length, 1)
+  rmSync(d, { recursive: true, force: true })
+})
+
+t('队列里没有 running → 一个都不动，也不重写文件', () => {
+  const d = mkdtempSync(join(tmpdir(), 'ug-zombie5-'))
+  addJob(d, { name: 'pkg-e', to: '5.0.0' })
+  const before = readFileSync(queuePath(d), 'utf8')
+  const r = recoverZombieJobs(d)
+  eq(r.recovered.length, 0)
+  eq(r.failed.length, 0)
+  eq(readFileSync(queuePath(d), 'utf8'), before, '没残局就别碰文件')
+  rmSync(d, { recursive: true, force: true })
+})
+
+console.log('')
 console.log('=== idle：扫会话兜底（事件漏了也不许误判空闲）===')
 
 /** 造一个假 Session：seq + eventAt */
@@ -356,6 +419,63 @@ t('最后一条是 turn/end → 不算忙（回合收尾了）', () => {
 
 t('一条事件都没有的会话不算忙（建了没跑过）', () => {
   eq(scanBusySessions({ list: () => [fakeSession('s3', [])] }), [])
+})
+
+// 🔴 2026-10-25 真机事故回归：主人「我没进行任何对话，怎么显示 5 个正在运行？」
+//    宿主在 turn/end 之后会紧跟 session/end-seed 这类记账事件。
+//    旧逻辑「任何非 turn/end 事件 → running」把四条早聊完的会话全算成在跑。
+t('turn/end 之后跟一条 session/end-seed → 仍然不算忙（记账事件不许重新点着）', () => {
+  const s = fakeSession('s4', ['turn/start', 'turn/end', 'session/end-seed'])
+  eq(lastEventType(s), 'session/end-seed', '最后一条确实不是 turn/end')
+  eq(scanBusySessions({ list: () => [s] }), [], '必须靠回溯 turn/* 判成 idle')
+})
+
+t('turn/end 之后跟 session/title、todo/write、model/selection → 也都不算忙', () => {
+  for (const tail of ['session/title', 'todo/write', 'model/selection', 'job/registered', 'compaction/summary']) {
+    const s = fakeSession('s5', ['turn/start', 'turn/end', tail])
+    eq(scanBusySessions({ list: () => [s] }), [], `收尾后的 ${tail} 不该让它变忙`)
+  }
+})
+
+t('turn/start 之后跟记账事件 → 仍然算忙（真在跑的回合不能被漏掉）', () => {
+  const s = fakeSession('s6', ['turn/start', 'session/end-seed', 'todo/write'])
+  eq(scanBusySessions({ list: () => [s] }).map((x) => x.id), ['s6'])
+})
+
+t('同一会话多轮：只有最后一个 turn/* 说了算', () => {
+  const running = fakeSession('s7', ['turn/start', 'turn/end', 'turn/start', 'step/start', 'session/title'])
+  eq(scanBusySessions({ list: () => [running] }).map((x) => x.id), ['s7'])
+  const done = fakeSession('s8', ['turn/start', 'turn/end', 'turn/start', 'turn/end', 'session/end-seed'])
+  eq(scanBusySessions({ list: () => [done] }), [])
+})
+
+t('会话事件里根本没有 turn/* → 判断不出来，不拦人（别把队列永久卡死）', () => {
+  eq(scanBusySessions({ list: () => [fakeSession('s9', ['permission/preset', 'sandbox/mode'])] }), [])
+})
+
+// 🔴 2026-10-25 实测：当前会话 230 条事件，turn/start 在第 6 条。
+//    回看预算太小会直接越过它，把正在跑的会话判成「不知道」。
+t('一个回合里堆了 500 条事件 → 仍要回溯到 turn/start，判成忙', () => {
+  const types = ['turn/start']
+  for (let i = 0; i < 500; i++) types.push('plugin:translator/result')
+  const s = fakeSession('s10', types)
+  eq(scanBusySessions({ list: () => [s] }).map((x) => x.id), ['s10'], '长回合不许被回看预算截断')
+})
+
+t('turnStateOf 结果按 seq 缓存：seq 不变不重扫', () => {
+  let reads = 0
+  const types = ['turn/start', 'step/start']
+  const s = { id: 's11', seq: types.length, eventAt: (i) => { reads += 1; return types[i] ? { type: types[i] } : undefined } }
+  const first = turnStateOf(s)
+  const afterFirst = reads
+  const second = turnStateOf(s)
+  eq(second.state, first.state, '两次结论要一致')
+  eq(reads, afterFirst, 'seq 没变不该再读事件')
+  // seq 变了要重扫
+  s.seq = 3
+  const third = turnStateOf(s)
+  ok(reads > afterFirst, 'seq 变了必须重扫')
+  eq(third.state, 'running')
 })
 
 t('没有 sessions 服务 / list 抛错 → 空数组，不炸', () => {
@@ -377,6 +497,65 @@ t('probeBusy 抛错 → 当作没人忙，但绝不抛给宿主', () => {
   const idle = createIdleTracker({ quietMs: 10, now: () => clock, probeBusy: () => { throw new Error('boom') } })
   clock = 100
   ok(idle.isIdle(), 'probe 炸了不该把队列永久卡死')
+})
+
+// 🔴 2026-10-25 同一个事故的另一半：事件流里也不能被记账事件重新点着
+t('事件流：turn/end 之后再收 session/end-seed，不许从 idle 变回 running', () => {
+  let clock = 0
+  const idle = createIdleTracker({ quietMs: 10, now: () => clock })
+  const handlers = new Map()
+  const on = (ev, fn) => { handlers.set(ev, fn); return () => {} }
+  attachIdle(idle, on)
+  const emit = (ev, ...a) => handlers.get(ev)?.(...a)
+
+  emit('session/event', { id: 'a1' }, { type: 'turn/start' })
+  eq(idle.snapshot().running, ['a1'], 'turn/start 要在跑')
+  emit('session/event', { id: 'a1' }, { type: 'turn/end' })
+  eq(idle.snapshot().running, [], 'turn/end 要收尾')
+  emit('session/event', { id: 'a1' }, { type: 'session/end-seed' })
+  eq(idle.snapshot().running, [], '记账事件不许把收尾的会话重新点着（这就是那次 5 个在跑的元凶）')
+  emit('session/event', { id: 'a1' }, { type: 'session/title' })
+  emit('session/event', { id: 'a1' }, { type: 'todo/write' })
+  eq(idle.snapshot().running, [], '其它记账事件同理')
+})
+
+t('事件流：回合内的 tool/call 只续命、不改判（stale 不该误杀长回合）', () => {
+  let clock = 0
+  const idle = createIdleTracker({ quietMs: 10, staleMs: 100, now: () => clock })
+  const handlers = new Map()
+  attachIdle(idle, (ev, fn) => { handlers.set(ev, fn); return () => {} })
+  const emit = (ev, ...a) => handlers.get(ev)?.(...a)
+
+  emit('session/event', { id: 'b1' }, { type: 'turn/start' })
+  clock = 90
+  emit('session/event', { id: 'b1' }, { type: 'tool/call' }) // 续期
+  clock = 150 // 距 turn/start 150ms，但距续期只有 60ms
+  eq(idle.snapshot().running, ['b1'], '长回合被 tool/call 续期后不该过期')
+})
+
+t('事件流：收尾之后的**记账**事件不许复活；非记账的残余事件宁可保守算忙', () => {
+  let clock = 0
+  const idle = createIdleTracker({ quietMs: 10, now: () => clock })
+  const handlers = new Map()
+  attachIdle(idle, (ev, fn) => { handlers.set(ev, fn); return () => {} })
+  const emit = (ev, ...a) => handlers.get(ev)?.(...a)
+
+  emit('session/event', { id: 'c1' }, { type: 'turn/start' })
+  emit('session/event', { id: 'c1' }, { type: 'turn/end' })
+  for (const t of ['session/end-seed', 'session/title', 'todo/write', 'compaction/summary', 'plugin:translator/result']) {
+    emit('session/event', { id: 'c1' }, { type: t })
+    eq(idle.snapshot().running, [], `记账事件 ${t} 不许复活已收尾的会话`)
+  }
+})
+
+
+t('isBookkeeping：记账事件认得出来，回合内事件不许被误判成记账', () => {
+  for (const t2 of ['session/end-seed', 'session/title', 'todo/write', 'model/selection', 'compaction/summary', 'plugin:translator/result']) {
+    ok(isBookkeeping(t2), `${t2} 应该是记账事件`)
+  }
+  for (const t2 of ['turn/start', 'turn/end', 'tool/call', 'tool/result', 'step/start', 'assistant/message']) {
+    ok(!isBookkeeping(t2), `${t2} 是回合内事件，不能当记账`)
+  }
 })
 
 

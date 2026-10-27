@@ -1,3 +1,88 @@
+## 0.1.5（2026-10-25）
+
+主人让「全面检查一下插件，看看逻辑合不合理」。查完发现四个真问题，都修了。
+
+### 1. 僵尸 `running` 任务会把包永久静音（最严重）
+
+真机证据：队列里 `@michengai/dsh-skills-manager → 1.2.13` 卡在 `status: 'running'`，
+`startedAt` 停在 **2026-10-23T09:53 —— 两天前**。
+
+原因是宿主重载/崩溃时，`markJob(running)` 已经落盘、`finally` 里的收尾没来得及跑。
+后果是一串的：`pendingJobs()` 不认它（不跑）；`renderQueue` 给它挂 ⏳（看着像正在装）；
+`addJob` 的去重把它当「已在排队」（连重排都不让）—— 这个包从此彻底静音，还占着 ⏳。
+
+修法：新增 `recoverZombieJobs()`，在 `pump.start()` **之前**跑一次。
+判定保守：只有超过 `ZOMBIE_AFTER_MS`（30 分钟）没动静才算残留；
+真在跑的任务几十秒内就会推进，不会误杀。已试满 3 次的判 failed，否则放回 pending。
+**真机上那个任务已当场放回队列**（`running:1` → `pending:1`）。
+
+### 2. 两个配置项静默失效
+
+`Config` schema 里声明了 `sentinel` / `sentinelDebounceMs`，但 `cfg` 对象里**漏了**。
+后果：主人改 `sentinelDebounceMs` 永远用 2500（改了没反应），
+`sentinel` 关不掉（被 `cfgBool(undefined, true)` 兜成开）。
+现在 schema 22 项 ↔ cfg 22 项一一对齐。
+
+### 3. 自动巡场可能永久卡死
+
+`createAutoScan` 有 `running` 防叠加，但如果某次 `scan()`（并发打 registry）卡住不返回，
+`running` 就**永远是 true**，之后每轮都 `skipped: 'busy'` —— 巡场静默死掉，
+界面上只显示「上次巡场：busy」，看不出是坏了。
+现在给整轮一个上限（默认 10 分钟，实际取「巡场间隔的一半」），超时就放弃这轮、放掉 `running`。
+
+⚠️ 写超时守卫时踩到一个坑并记在这：`setTimeout(...).unref()` 会让 node 认为「没我事了」直接退出，
+超时守卫永远不触发（单测里实测复现）。所以这里**故意不 unref**，靠 `finally` 里的 `clearTimeout` 收尾。
+
+### 4. 队列路径会在 `auto` 设置下自动重启，违反硬约束 7
+
+主人拍过板：「自动化任务里**禁止**『自动更新插件 + 自动重启』」。
+但队列的 `runJob` 里写着 `if (restartAfterApply === 'auto') restartSelf(...)` —— 队列就是自动化任务。
+现在队列这条路**永不重启**，只写日志提示「装好了，要生效请主人手动重启」；
+`auto` 开关只留给主人手动点 `plugin_update_apply` 时用。
+
+### 兼容性核查（结论：能适配当前宿主）
+
+- 用到的宿主事件 `session/event`、`api-session/status`、`agent/status`、
+  `agent/inbox/inserted`、`agent/disposed` —— 五个在 `app.asar` 里都还在。
+- 用到的服务 `sessions` / `webServer` / `slots` / `llm` / `agentDefaultModel` 都在。
+- `tools.guard` 仍在（硬拦截靠它）。
+- `HOST_INJECTED` 名单与宿主 `pnpm-workspace.yaml` 的 `peerDependencyRules.ignoreMissing`
+  **逐项一致**（28 项），试跑不会误报缺包。
+- `eventAt` 是 **0-based**（合法下标 0…n-1），已在 0.1.4 修正。
+
+测试：343 项全绿（新增僵尸恢复 5 项、巡场超时 1 项）。
+
+## 0.1.4（2026-10-25）
+
+修一个把主人吓到的误判：**「我没进行任何对话，怎么显示 5 个正在运行？」**
+
+真机查出来的根因是两层，都在 `lib/idle.js`：
+
+1. **事件流把收尾的回合重新点着。** 原来「任何非 `turn/end` 事件 → running」，
+   而宿主在 `turn/end` 之后紧跟一条 `session/end-seed`（还有 `session/title`、
+   `todo/write`、`model/selection`、`compaction/*`、`plugin:*` 这些回合之外的记账事件）。
+   于是 turn/end 先置 idle，下一条 end-seed 又把它摁回 running，
+   四条早就聊完的会话全被算成「正在跑」。
+   现在：**记账事件只续命（`keepAlive`），绝不把 idle 改回 running**；
+   回合内事件（`tool/call`、`step/start`…）照旧算 running（宁可多等，别在主人干活时动 node_modules）。
+
+2. **扫会话只看最后一条事件。** `scanBusySessions()` 原来拿 `lastEventType()` 就下结论，
+   同样被记账事件带偏。现在新增 `turnStateOf()`：**往回找最近一条 `turn/*`**，
+   那才是宿主自己写下的回合真相。
+   回看预算是 20000 条而不是 200 —— 实测当前会话 230 条事件、`turn/start` 在第 6 条，
+   一个回合里能堆两百多条（每个 step 都有 user/message、translator、assistant 消息）。
+   结果按 `(session, seq)` 缓存，seq 不变不重扫，probe 高频调用零成本。
+
+顺带修的：`reason()` / `snapshot()` 原来各自重复调 `runningAgents()` + `probedBusy()`，
+现在合并成一次 `busyIds()`；诊断文本从「最后事件 xxx」改成
+「`turn/xxx` 之后最后事件 yyy」，一眼能看出是哪个边界判的。
+
+**实测验证**（拿五个真实会话日志跑）：修复前 5 个全判「忙」，修复后
+**1 个真忙（就是当时正在对话的那个）+ 3 个已收尾 + 1 个判不出（不拦人）**。
+
+测试：`test/p4.mjs` 新增 8 项回归（记账事件不许复活、长回合不许被回看预算截断、
+缓存语义、`isBookkeeping` 边界），共 **54 项**，全绿。
+
 ## 0.1.3（2026-10-23）
 
 修三个真机上当场被抓到的毛病：
