@@ -24,11 +24,11 @@
   "author": "大肥鱼",
   "repository": {
     "type": "git",
-    "url": "git+https://atomgit.com/lpj_/dsh-update-guard.git"
+    "url": "git+https://github.com/Lian-peiji/dsh-update-guard.git"
   },
-  "homepage": "https://atomgit.com/lpj_/dsh-update-guard",
+  "homepage": "https://github.com/Lian-peiji/dsh-update-guard",
   "scripts": {
-    "test": "node test/smoke.mjs && node test/assemble.mjs && node test/p2.mjs && node test/client.mjs && node test/webapi.mjs && node test/p3-memory.mjs && node test/probe_cfg.mjs && node test/p4.mjs && node test/patchfix.mjs && node test/sentinel.mjs && node test/autoscan.mjs && node test/loadprobe.mjs",
+    "test": "node test/smoke.mjs && node test/assemble.mjs && node test/p2.mjs && node test/client.mjs && node test/webapi.mjs && node test/p3-memory.mjs && node test/probe_cfg.mjs && node test/p4.mjs && node test/patchfix.mjs && node test/sentinel.mjs && node test/autoscan.mjs && node test/loadprobe.mjs && node test/regress-0.1.6.mjs",
     "test:live": "node test/live-restart-dry.mjs"
   },
   "keywords": [
@@ -55,5 +55,5 @@
       "platform": "web"
     }
   },
-  "version": "0.1.5"
+  "version": "0.1.6"
 }

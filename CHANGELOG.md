@@ -1,4 +1,80 @@
+## 0.1.6（2026-11-02）
+
+主人让「查查运行情况，看看需不需要修复升级优化」。查了 11 天的真机数据（更新档案 277 条、
+队列 120 条、病历 4 份），揪出两个**「测试全绿、真机静默出错」**的 bug，都修了。
+
+### 1. 🔴 僵尸任务清理从 v0.1.5 起就没跑过（`dir is not defined`）
+
+0.1.5 加的那个 `recoverZombieJobs()` 调用写的是 `recoverZombieJobs(dir, ...)` —— 但
+**`apply()` 里根本没有 `dir` 这个变量**（正确的名字是 `pumpDir`）。于是每次都抛
+`ReferenceError: dir is not defined`，被外层 `catch` 吞掉，日志里只有一句
+「收拾残留出错（不影响正常跑）」，谁也看不见。
+
+后果（真机证据，都还摆在队列里）：
+
+| 任务 | 卡在 running 多久 |
+| --- | --- |
+| cc-safety-net → 2.6.19 | **6 天**（10-27 起） |
+| dsh-meme → 0.1.67 | **4 天**（10-29 起） |
+| dsh-free-search → 0.9.21 | **3 天**（10-30 起） |
+
+更糟的是 0.1.5 的 CHANGELOG 写着「真机上那个任务已当场放回队列」—— **那句话是假的**，
+代码从来没跑通过。所以这次连同「怎么防止再犯」一起改了：
+
+- `dir` → `pumpDir`；
+- catch 里升级到 `ctx.logger.error`，清理失败必须出声，不许再静默；
+- 新增 `test/regress-0.1.6.mjs`，静态扫描源码钉死这行用的是 `pumpDir`。
+
+真机上那 3 条已当场收拾干净（`running: 3 → 0`）。
+
+### 2. 🔴 bundle 型插件被误判「不是 DSH 插件」→ 连滚 18 次
+
+`apply.js` 的 `verifyInstalled` 只认 `mod.apply` / `mod.default.apply`。
+而 10-23 的提交 `07a9ded` 给 `sandbox-trial.js` 补过 `declaresDsh` 判定，**`apply.js` 那份漏改了**。
+
+于是 cc-safety-net（`exports["."]` 指向 `dist/index.js`，导出的是 `{id, effect, server}`，
+真正入口在 `dsh.bundle.patch` 里指定的 `dist/deepseek-harness/index.js`）每次真装都被判：
+
+> 装上了但加载不起来（没有导出 apply —— 不是 DSH 插件），装进去 DSH 会崩，已经自动退回 2.6.16
+
+**18 次真装成功 → 18 次被自己回滚掉**，白烧 18 轮试跑。而它现在装着的 2.7.1 用同一套判定
+也过不了 —— 说明是**误判，不是新版本坏了**。
+
+修法：把入口解析 + 插件判定抽成 `sandbox-trial.js` 的 `inspectInstalledPackage()`，
+`apply.js` 与 `loadInStage` **共用一份**（两份各写各的正是这次漏改的根源）。现在：
+
+- 认三种形态：`mod.apply` 是函数 / `default` 是函数或带 apply / `package.json` 声明了 `dsh` 字段；
+- bundle 型插件优先用 `dsh.bundle.patch` 里 `name:` 指向的入口（相对补丁文件所在目录）。
+
+**副产品**：`test/loadprobe.mjs` 从 8 失败变成 12/12 全过 —— 那 8 个失败其实一直是同一个根因。
+
+### 3. 🟠 僵尸恢复时顺手收尾「目标版本已过时」的任务
+
+僵尸躺了 3~6 天才被收拾，它的目标版本往往早就过期了（cc-safety-net@2.6.19 放回队列时
+实装已经是 2.7.1）。直接放回 pending 只会白跑一轮试跑 + 白调一次审查模型。
+
+`recoverZombieJobs()` 新增 `installed` 选项：实装版本 ≥ 目标版本 → 判 `done` / `result: "obsolete"`，
+不再白跑。不传 `installed` 时行为与以前**完全一致**（向后兼容，旧的 5 个测试一个没改）。
+
+### 4. 测试
+
+新增 `test/regress-0.1.6.mjs`（8 个断言），并加进 `npm test`。全套 13 个套件：
+
+```
+smoke 58 · assemble ✓ · p2 21 · client 49 · webapi 62 · p3-memory 22 · probe_cfg 6
+p4 62 · patchfix 23 · sentinel 36 · autoscan 41 · loadprobe 12 · regress 8
+```
+
+### 顺带记录的现状（没改代码，但要知道）
+
+- **cc-safety-net 其实已经是 2.7.1 了**，不是 2.6.16。那 18 次回滚是历史；10-31 之前
+  某次真装成功了，所以现在磁盘上是 2.7.1。**这不否定 bug 2** —— 恰恰证明 2.7.1 本身能装。
+- 队列 120 条无裁剪、同版本反复排队（billion-context@0.1.208 排了 12 次、cc-safety-net 系列
+  累计 37 次）仍是待优化项，本次没动。
+- 118 次审查里 12 次是「审查模型不可用，按默认策略放行」，属既定策略，未改。
+
 ## 0.1.5（2026-10-25）
+
 
 主人让「全面检查一下插件，看看逻辑合不合理」。查完发现四个真问题，都修了。
 

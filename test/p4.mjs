@@ -390,6 +390,45 @@ t('没有 startedAt 的残缺 running → 直接放回队列', () => {
   rmSync(d, { recursive: true, force: true })
 })
 
+// 🔴 2026-11-02 真机：僵尸躺了 3~6 天，放回队列时目标版本早就过期了
+//    （cc-safety-net@2.6.19 放回去时实装已经是 2.7.1）。
+//    直接放回 pending 会白跑一轮试跑 + 白调一次审查模型，纯烧钱。
+t('僵尸的目标版本已不高于实装 → 直接收尾，不白跑一轮', () => {
+  const d = mkdtempSync(join(tmpdir(), 'ug-zombie6-'))
+  addJob(d, { name: 'pkg-old', to: '2.6.19' })
+  const q0 = readQueue(d)
+  writeQueue(d, { jobs: q0.jobs.map((j) => ({ ...j, status: 'running', tries: 1, startedAt: new Date(Date.now() - 6 * 3600_000).toISOString() })) })
+  const r = recoverZombieJobs(d, { installed: { 'pkg-old': '2.7.1' } })
+  eq(r.obsolete.length, 1, '要认出来这条已经过时')
+  eq(r.recovered.length, 0, '不许再放回 pending 白跑')
+  eq(readQueue(d).jobs[0].status, 'done')
+  eq(readQueue(d).jobs[0].result, 'obsolete')
+  rmSync(d, { recursive: true, force: true })
+})
+
+t('僵尸目标版本仍高于实装 → 照旧放回队列（别把该装的也收尾掉）', () => {
+  const d = mkdtempSync(join(tmpdir(), 'ug-zombie7-'))
+  addJob(d, { name: 'pkg-new', to: '3.0.0' })
+  const q0 = readQueue(d)
+  writeQueue(d, { jobs: q0.jobs.map((j) => ({ ...j, status: 'running', tries: 1, startedAt: new Date(Date.now() - 6 * 3600_000).toISOString() })) })
+  const r = recoverZombieJobs(d, { installed: { 'pkg-new': '2.0.0' } })
+  eq(r.obsolete.length, 0)
+  eq(r.recovered.length, 1, '还有更新可装，必须放回队列')
+  eq(pendingJobs(readQueue(d)).length, 1)
+  rmSync(d, { recursive: true, force: true })
+})
+
+t('没给 installed 时行为与以前完全一致（向后兼容）', () => {
+  const d = mkdtempSync(join(tmpdir(), 'ug-zombie8-'))
+  addJob(d, { name: 'pkg-x', to: '1.0.0' })
+  const q0 = readQueue(d)
+  writeQueue(d, { jobs: q0.jobs.map((j) => ({ ...j, status: 'running', tries: 1, startedAt: new Date(Date.now() - 6 * 3600_000).toISOString() })) })
+  const r = recoverZombieJobs(d)
+  eq(r.obsolete.length, 0, '没传 installed 就不判过时')
+  eq(r.recovered.length, 1)
+  rmSync(d, { recursive: true, force: true })
+})
+
 t('队列里没有 running → 一个都不动，也不重写文件', () => {
   const d = mkdtempSync(join(tmpdir(), 'ug-zombie5-'))
   addJob(d, { name: 'pkg-e', to: '5.0.0' })
